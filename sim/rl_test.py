@@ -17,13 +17,19 @@ VIDEO_BIT_RATE = [300,750,1200,1850,2850,4300]  # Kbps
 BUFFER_NORM_FACTOR = 10.0
 CHUNK_TIL_VIDEO_END_CAP = 48.0
 M_IN_K = 1000.0
+VIDEO_CHUNCK_LEN = 4000.0  # millisec, every time add this amount to buffer 
+MILLISECONDS_IN_SECOND = 1000.0
 REBUF_PENALTY = 4.3  # 1 sec rebuffering -> 3 Mbps
 SMOOTH_PENALTY = 1
 DEFAULT_QUALITY = 1  # default video quality without agent
+EPS = 1e-8
+
 RANDOM_SEED = 42
 RAND_RANGE = 1000
 LOG_FILE = './test_results/log_sim_rl'
-TEST_TRACES = './cooked_test_traces/'
+# TEST_TRACES = './cooked_test_traces/'
+TEST_TRACES = './dataset_0/'
+
 # log in format of time_stamp bit_rate buffer_size rebuffer_time chunk_size download_time reward
 NN_MODEL = sys.argv[1]
 
@@ -40,7 +46,7 @@ def main():
                               all_cooked_bw=all_cooked_bw)
 
     log_path = LOG_FILE + '_' + all_file_names[net_env.trace_idx]
-    log_file = open(log_path, 'wb')
+    log_file = open(log_path, 'w')
 
     with tf.Session() as sess:
 
@@ -86,8 +92,14 @@ def main():
             time_stamp += delay  # in ms
             time_stamp += sleep_time  # in ms
 
+            # -- buffer-based reward --
+            if buffer_size < 2 * VIDEO_CHUNCK_LEN / MILLISECONDS_IN_SECOND:
+                reward = np.log(buffer_size/(VIDEO_CHUNCK_LEN / MILLISECONDS_IN_SECOND)-1 + EPS)
+            else:
+                reward = 2 - 0.5 * buffer_size/(VIDEO_CHUNCK_LEN / MILLISECONDS_IN_SECOND)
+
             # reward is video quality - rebuffer penalty - smoothness
-            reward = VIDEO_BIT_RATE[bit_rate] / M_IN_K \
+            reward_lin = VIDEO_BIT_RATE[bit_rate] / M_IN_K \
                      - REBUF_PENALTY * rebuf \
                      - SMOOTH_PENALTY * np.abs(VIDEO_BIT_RATE[bit_rate] -
                                                VIDEO_BIT_RATE[last_bit_rate]) / M_IN_K
@@ -103,7 +115,8 @@ def main():
                            str(rebuf) + '\t' +
                            str(video_chunk_size) + '\t' +
                            str(delay) + '\t' +
-                           str(reward) + '\n')
+                           str(reward) + '\t' + 
+                           str(reward_lin) + '\n')
             log_file.flush()
 
             # retrieve previous state
@@ -157,7 +170,7 @@ def main():
                     break
 
                 log_path = LOG_FILE + '_' + all_file_names[net_env.trace_idx]
-                log_file = open(log_path, 'wb')
+                log_file = open(log_path, 'w')
 
 
 if __name__ == '__main__':

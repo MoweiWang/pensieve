@@ -7,6 +7,7 @@ import tensorflow as tf
 import env
 import a3c
 import load_trace
+import time
 
 
 S_INFO = 6  # bit_rate, buffer_size, next_chunk_size, bandwidth_measurement(throughput and time), chunk_til_video_end
@@ -14,25 +15,42 @@ S_LEN = 8  # take how many frames in the past
 A_DIM = 6
 ACTOR_LR_RATE = 0.0001
 CRITIC_LR_RATE = 0.001
-NUM_AGENTS = 16
-TRAIN_SEQ_LEN = 100  # take as a train batch
-MODEL_SAVE_INTERVAL = 100
+NUM_AGENTS = 12
+TRAIN_SEQ_LEN = 200  # take as a train batch
+MODEL_SAVE_INTERVAL = 500
+DISPLAY_INTERVAL = 100
 VIDEO_BIT_RATE = [300,750,1200,1850,2850,4300]  # Kbps
 HD_REWARD = [1, 2, 3, 12, 15, 20]
 BUFFER_NORM_FACTOR = 10.0
 CHUNK_TIL_VIDEO_END_CAP = 48.0
+VIDEO_CHUNCK_LEN = 4000.0  # millisec, every time add this amount to buffer 
+MILLISECONDS_IN_SECOND = 1000.0
 M_IN_K = 1000.0
 REBUF_PENALTY = 4.3  # 1 sec rebuffering -> 3 Mbps
 SMOOTH_PENALTY = 1
 DEFAULT_QUALITY = 1  # default video quality without agent
+EPS = 1e-8
+ENTROPY_CHECK_EPOCHS = [20000, 40000, 80000, 100000, 120000]
+# ENTROPY_CHECK_EPOCHS = [100, 200, 300, 400, 500]
+ENTROPY_WEIGHT_VALUES = [5.0, 1.0, 0.5, 0.3, 0.01]
+ENTROPY_UPDATE_INTERVAL = 101
+
 RANDOM_SEED = 42
 RAND_RANGE = 1000
-SUMMARY_DIR = './results'
+
+_date = time.strftime("%Y-%m-%d", time.localtime())
+_time = time.strftime("%H:%M:%S", time.localtime()) 
+SUMMARY_DIR = './results/' + _date + '/'+ _time
+
 LOG_FILE = './results/log'
 TEST_LOG_FOLDER = './test_results/'
-TRAIN_TRACES = './cooked_traces/'
+# TRAIN_TRACES = './cooked_traces/'
+TRAIN_TRACES = './dataset_0/'
+
 # NN_MODEL = './results/pretrain_linear_reward.ckpt'
 NN_MODEL = None
+# NN_MODEL = './results/nn_model_ep_155000.ckpt' # note this
+START_EPOCH = 0
 
 
 def testing(epoch, nn_model, log_file):
@@ -48,7 +66,7 @@ def testing(epoch, nn_model, log_file):
     test_log_files = os.listdir(TEST_LOG_FOLDER)
     for test_log_file in test_log_files:
         reward = []
-        with open(TEST_LOG_FOLDER + test_log_file, 'rb') as f:
+        with open(TEST_LOG_FOLDER + test_log_file, 'r') as f:
             for line in f:
                 parse = line.split()
                 try:
@@ -56,6 +74,7 @@ def testing(epoch, nn_model, log_file):
                 except IndexError:
                     break
         rewards.append(np.sum(reward[1:]))
+        
 
     rewards = np.array(rewards)
 
@@ -65,6 +84,12 @@ def testing(epoch, nn_model, log_file):
     rewards_median = np.percentile(rewards, 50)
     rewards_95per = np.percentile(rewards, 95)
     rewards_max = np.max(rewards)
+    
+    print("-------------------------------------------------------------------------------------------------------------------------------------------")
+    print('Epoch: %.2f rewards_min: %.2f rewards_5per: %.2f rewards_mean: %.2f rewards_median: %.2f rewards_95per: %.2f rewards_max: %.2f ' 
+            %(epoch, rewards_min, rewards_5per, rewards_mean, rewards_median, rewards_95per, rewards_max))
+    print("-------------------------------------------------------------------------------------------------------------------------------------------")
+
 
     log_file.write(str(epoch) + '\t' +
                    str(rewards_min) + '\t' +
@@ -85,7 +110,7 @@ def central_agent(net_params_queues, exp_queues):
                         filemode='w',
                         level=logging.INFO)
 
-    with tf.Session() as sess, open(LOG_FILE + '_test', 'wb') as test_log_file:
+    with tf.Session() as sess, open(LOG_FILE + '_test', 'w') as test_log_file:
 
         actor = a3c.ActorNetwork(sess,
                                  state_dim=[S_INFO, S_LEN], action_dim=A_DIM,
@@ -106,14 +131,29 @@ def central_agent(net_params_queues, exp_queues):
             saver.restore(sess, nn_model)
             print("Model restored.")
 
-        epoch = 0
+        epoch = START_EPOCH
+        entropy_weight = 0.0
 
         # assemble experiences from agents, compute the gradients
         while True:
+            if epoch % ENTROPY_UPDATE_INTERVAL == 0:
+                if epoch <= ENTROPY_CHECK_EPOCHS[0]:
+                    entropy_weight = ENTROPY_WEIGHT_VALUES[0]
+                elif epoch <= ENTROPY_CHECK_EPOCHS[1]:
+                    entropy_weight = ENTROPY_WEIGHT_VALUES[1]
+                elif epoch <= ENTROPY_CHECK_EPOCHS[2]:
+                    entropy_weight = ENTROPY_WEIGHT_VALUES[2]
+                elif epoch <= ENTROPY_CHECK_EPOCHS[3]:
+                    entropy_weight = ENTROPY_WEIGHT_VALUES[3]
+                elif epoch <= ENTROPY_CHECK_EPOCHS[4]:
+                    entropy_weight = ENTROPY_WEIGHT_VALUES[4]
+                else:
+                    entropy_weight = ENTROPY_WEIGHT_VALUES[4]
+
             # synchronize the network parameters of work agent
             actor_net_params = actor.get_network_params()
             critic_net_params = critic.get_network_params()
-            for i in xrange(NUM_AGENTS):
+            for i in range(NUM_AGENTS):
                 net_params_queues[i].put([actor_net_params, critic_net_params])
                 # Note: this is synchronous version of the parallel training,
                 # which is easier to understand and probe. The framework can be
@@ -135,7 +175,7 @@ def central_agent(net_params_queues, exp_queues):
             actor_gradient_batch = []
             critic_gradient_batch = []
 
-            for i in xrange(NUM_AGENTS):
+            for i in range(NUM_AGENTS):
                 s_batch, a_batch, r_batch, terminal, info = exp_queues[i].get()
 
                 actor_gradient, critic_gradient, td_batch = \
@@ -143,7 +183,7 @@ def central_agent(net_params_queues, exp_queues):
                         s_batch=np.stack(s_batch, axis=0),
                         a_batch=np.vstack(a_batch),
                         r_batch=np.vstack(r_batch),
-                        terminal=terminal, actor=actor, critic=critic)
+                        terminal=terminal, actor=actor, critic=critic, entropy_weight=entropy_weight)
 
                 actor_gradient_batch.append(actor_gradient)
                 critic_gradient_batch.append(critic_gradient)
@@ -159,13 +199,13 @@ def central_agent(net_params_queues, exp_queues):
             assert len(actor_gradient_batch) == len(critic_gradient_batch)
             # assembled_actor_gradient = actor_gradient_batch[0]
             # assembled_critic_gradient = critic_gradient_batch[0]
-            # for i in xrange(len(actor_gradient_batch) - 1):
-            #     for j in xrange(len(assembled_actor_gradient)):
+            # for i in range(len(actor_gradient_batch) - 1):
+            #     for j in range(len(assembled_actor_gradient)):
             #             assembled_actor_gradient[j] += actor_gradient_batch[i][j]
             #             assembled_critic_gradient[j] += critic_gradient_batch[i][j]
             # actor.apply_gradients(assembled_actor_gradient)
             # critic.apply_gradients(assembled_critic_gradient)
-            for i in xrange(len(actor_gradient_batch)):
+            for i in range(len(actor_gradient_batch)):
                 actor.apply_gradients(actor_gradient_batch[i])
                 critic.apply_gradients(critic_gradient_batch[i])
 
@@ -189,6 +229,12 @@ def central_agent(net_params_queues, exp_queues):
             writer.add_summary(summary_str, epoch)
             writer.flush()
 
+            if epoch % DISPLAY_INTERVAL == 0:
+                print('Epoch: ' + str(epoch) +
+                        ' TD_loss: ' + str(avg_td_loss) +
+                        ' Avg_reward: ' + str(avg_reward) +
+                        ' Avg_entropy: ' + str(avg_entropy))
+
             if epoch % MODEL_SAVE_INTERVAL == 0:
                 # Save the neural net parameters to disk.
                 save_path = saver.save(sess, SUMMARY_DIR + "/nn_model_ep_" +
@@ -205,7 +251,7 @@ def agent(agent_id, all_cooked_time, all_cooked_bw, net_params_queue, exp_queue)
                               all_cooked_bw=all_cooked_bw,
                               random_seed=agent_id)
 
-    with tf.Session() as sess, open(LOG_FILE + '_agent_' + str(agent_id), 'wb') as log_file:
+    with tf.Session() as sess, open(LOG_FILE + '_agent_' + str(agent_id), 'w') as log_file:
         actor = a3c.ActorNetwork(sess,
                                  state_dim=[S_INFO, S_LEN], action_dim=A_DIM,
                                  learning_rate=ACTOR_LR_RATE)
@@ -241,6 +287,13 @@ def agent(agent_id, all_cooked_time, all_cooked_bw, net_params_queue, exp_queue)
 
             time_stamp += delay  # in ms
             time_stamp += sleep_time  # in ms
+
+            # -- buffer-based reward --
+            # if buffer_size < 2 * VIDEO_CHUNCK_LEN / MILLISECONDS_IN_SECOND:
+            #     reward = np.log(buffer_size/(VIDEO_CHUNCK_LEN / MILLISECONDS_IN_SECOND)-1 + EPS)
+            # else:
+            #     reward = 2 - 0.5 * buffer_size/(VIDEO_CHUNCK_LEN / MILLISECONDS_IN_SECOND)
+            # print("reward:", reward , "buffer_size: ", buffer_size)
 
             # -- linear reward --
             # reward is video quality - rebuffer penalty - smoothness
@@ -353,7 +406,7 @@ def main():
     # inter-process communication queues
     net_params_queues = []
     exp_queues = []
-    for i in xrange(NUM_AGENTS):
+    for i in range(NUM_AGENTS):
         net_params_queues.append(mp.Queue(1))
         exp_queues.append(mp.Queue(1))
 
@@ -365,12 +418,12 @@ def main():
 
     all_cooked_time, all_cooked_bw, _ = load_trace.load_trace(TRAIN_TRACES)
     agents = []
-    for i in xrange(NUM_AGENTS):
+    for i in range(NUM_AGENTS):
         agents.append(mp.Process(target=agent,
                                  args=(i, all_cooked_time, all_cooked_bw,
                                        net_params_queues[i],
                                        exp_queues[i])))
-    for i in xrange(NUM_AGENTS):
+    for i in range(NUM_AGENTS):
         agents[i].start()
 
     # wait unit training is done

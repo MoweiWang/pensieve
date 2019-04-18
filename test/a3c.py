@@ -5,7 +5,7 @@ import tflearn
 
 GAMMA = 0.99
 A_DIM = 6
-ENTROPY_WEIGHT = 0.5
+# ENTROPY_WEIGHT = 0.5
 ENTROPY_EPS = 1e-6
 S_INFO = 4
 
@@ -44,11 +44,12 @@ class ActorNetwork(object):
         self.act_grad_weights = tf.placeholder(tf.float32, [None, 1])
 
         # Compute the objective (log action_vector and entropy)
+        self.entropy_weight = tf.placeholder(tf.float32)
         self.obj = tf.reduce_sum(tf.multiply(
                        tf.log(tf.reduce_sum(tf.multiply(self.out, self.acts),
                                             reduction_indices=1, keep_dims=True)),
                        -self.act_grad_weights)) \
-                   + ENTROPY_WEIGHT * tf.reduce_sum(tf.multiply(self.out,
+                   + self.entropy_weight * tf.reduce_sum(tf.multiply(self.out,
                                                            tf.log(self.out + ENTROPY_EPS)))
 
         # Combine the gradients here
@@ -67,7 +68,7 @@ class ActorNetwork(object):
             split_2 = tflearn.conv_1d(inputs[:, 2:3, :], 128, 4, activation='relu')
             split_3 = tflearn.conv_1d(inputs[:, 3:4, :], 128, 4, activation='relu')
             split_4 = tflearn.conv_1d(inputs[:, 4:5, :A_DIM], 128, 4, activation='relu')
-            split_5 = tflearn.fully_connected(inputs[:, 4:5, -1], 128, activation='relu')
+            split_5 = tflearn.fully_connected(inputs[:, 5:6, -1], 128, activation='relu')
 
             split_2_flat = tflearn.flatten(split_2)
             split_3_flat = tflearn.flatten(split_3)
@@ -93,11 +94,12 @@ class ActorNetwork(object):
             self.inputs: inputs
         })
 
-    def get_gradients(self, inputs, acts, act_grad_weights):
+    def get_gradients(self, inputs, acts, act_grad_weights, entropy_weight):
         return self.sess.run(self.actor_gradients, feed_dict={
             self.inputs: inputs,
             self.acts: acts,
-            self.act_grad_weights: act_grad_weights
+            self.act_grad_weights: act_grad_weights,
+            self.entropy_weight: entropy_weight
         })
 
     def apply_gradients(self, actor_gradients):
@@ -165,7 +167,7 @@ class CriticNetwork(object):
             split_2 = tflearn.conv_1d(inputs[:, 2:3, :], 128, 4, activation='relu')
             split_3 = tflearn.conv_1d(inputs[:, 3:4, :], 128, 4, activation='relu')
             split_4 = tflearn.conv_1d(inputs[:, 4:5, :A_DIM], 128, 4, activation='relu')
-            split_5 = tflearn.fully_connected(inputs[:, 4:5, -1], 128, activation='relu')
+            split_5 = tflearn.fully_connected(inputs[:, 5:6, -1], 128, activation='relu')
 
             split_2_flat = tflearn.flatten(split_2)
             split_3_flat = tflearn.flatten(split_3)
@@ -215,7 +217,7 @@ class CriticNetwork(object):
         })
 
 
-def compute_gradients(s_batch, a_batch, r_batch, terminal, actor, critic):
+def compute_gradients(s_batch, a_batch, r_batch, terminal, actor, critic, entropy_weight):
     """
     batch of s, a, r is from samples in a sequence
     the format is in np.array([batch_size, s/a/r_dim])
@@ -234,12 +236,12 @@ def compute_gradients(s_batch, a_batch, r_batch, terminal, actor, critic):
     else:
         R_batch[-1, 0] = v_batch[-1, 0]  # boot strap from last state
 
-    for t in reversed(xrange(ba_size - 1)):
+    for t in reversed(range(ba_size - 1)):
         R_batch[t, 0] = r_batch[t] + GAMMA * R_batch[t + 1, 0]
 
     td_batch = R_batch - v_batch
 
-    actor_gradients = actor.get_gradients(s_batch, a_batch, td_batch)
+    actor_gradients = actor.get_gradients(s_batch, a_batch, td_batch, entropy_weight)
     critic_gradients = critic.get_gradients(s_batch, R_batch)
 
     return actor_gradients, critic_gradients, td_batch
@@ -252,7 +254,7 @@ def discount(x, gamma):
     """
     out = np.zeros(len(x))
     out[-1] = x[-1]
-    for i in reversed(xrange(len(x)-1)):
+    for i in reversed(range(len(x)-1)):
         out[i] = x[i] + gamma*out[i+1]
     assert x.ndim >= 1
     # More efficient version:
@@ -266,7 +268,7 @@ def compute_entropy(x):
     H(x) = - sum( p * log(p))
     """
     H = 0.0
-    for i in xrange(len(x)):
+    for i in range(len(x)):
         if 0 < x[i] < 1:
             H -= x[i] * np.log(x[i])
     return H

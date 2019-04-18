@@ -61,7 +61,7 @@ def main():
                               all_cooked_bw=all_cooked_bw)
 
     log_path = LOG_FILE + '_' + all_file_names[net_env.trace_idx]
-    log_file = open(log_path, 'wb')
+    log_file = open(log_path, 'w')
 
     time_stamp = 0
 
@@ -174,10 +174,10 @@ def main():
 
 
         # future chunks length (try 4 if that many remaining)
-        last_index = int(CHUNK_TIL_VIDEO_END_CAP - video_chunk_remain)
+        last_index = int(CHUNK_TIL_VIDEO_END_CAP - video_chunk_remain) - 1
         future_chunk_length = MPC_FUTURE_CHUNK_COUNT
-        if ( TOTAL_VIDEO_CHUNKS - last_index < MPC_FUTURE_CHUNK_COUNT ):
-            future_chunk_length = TOTAL_VIDEO_CHUNKS - last_index
+        if ( TOTAL_VIDEO_CHUNKS - last_index - 1 < MPC_FUTURE_CHUNK_COUNT ):
+            future_chunk_length = TOTAL_VIDEO_CHUNKS - last_index - 1
 
         # all possible combinations of 5 chunk bitrates (9^5 options)
         # iterate over list and for each, compute reward and store max reward combination
@@ -264,14 +264,14 @@ def main():
             a_batch.append(action_vec)
             entropy_record = []
 
-            print "video count", video_count
+            print("video count", video_count)
             video_count += 1
 
             if video_count >= len(all_file_names):
                 break
 
             log_path = LOG_FILE + '_' + all_file_names[net_env.trace_idx]
-            log_file = open(log_path, 'wb')
+            log_file = open(log_path, 'w')
 
 
 if __name__ == '__main__':
